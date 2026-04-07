@@ -13,4 +13,4 @@
 2. In **Startup script** box, paste this **one line** and **change your email**:
 
    ```bash
-   curl -sSL <github>/setup-nginx.sh | USER_EMAIL=your-email@gmail.com bash
+   curl -sSL https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/teslamate-setup/main/teslamate-setup.sh | USER_EMAIL=your-email@gmail.com bash
