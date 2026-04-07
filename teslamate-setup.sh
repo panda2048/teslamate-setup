@@ -1,23 +1,38 @@
 #!/bin/bash
-# TeslaMate + Nginx + Automatic HTTPS + Email Credentials
-# Usage: curl ... | USER_EMAIL=xxx@gmail.com bash
+# TeslaMate + Nginx + Basic Auth - Fixed for GCP e2-micro
+# Fully automatic, robust on low RAM, fixes docker compose issue
 
 set -e
 
 USER_EMAIL=${USER_EMAIL:-""}
-
 if [ -z "$USER_EMAIL" ]; then
-    echo "Error: Please provide your email. Example:"
-    echo "curl -sSL https://.../setup-nginx.sh | USER_EMAIL=your@gmail.com bash"
+    echo "Error: Use USER_EMAIL=your@email.com in the startup script"
     exit 1
 fi
 
 echo "🚀 Starting TeslaMate setup for $USER_EMAIL ..."
 
-apt-get update && apt-get upgrade -y
-apt-get install -y docker.io docker-compose nginx apache2-utils curl certbot python3-certbot-nginx
+# === Fix installation issues first ===
+apt-get update
+apt-get install -y ca-certificates curl gnupg lsb-release
+
+# Add official Docker repository (this fixes docker compose)
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | \
+tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+apt-get update
+
+# Install clean Docker + Compose plugin + other packages
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin nginx apache2-utils
 
 systemctl enable --now docker
+
+# Cleanup heavy broken Google package if present
+apt-get remove --purge -y google-cloud-cli google-cloud-cli-anthoscli || true
 
 mkdir -p /opt/teslamate && cd /opt/teslamate
 
@@ -38,7 +53,7 @@ else
     source .credentials
 fi
 
-# TeslaMate services
+# TeslaMate docker-compose
 if [ ! -f docker-compose.yml ]; then
     cat > docker-compose.yml <<'EOT'
 services:
@@ -87,11 +102,10 @@ volumes:
 EOT
 fi
 
+# Start services with proper docker compose
 docker compose up -d
 
-PUBLIC_IP=$(curl -s ifconfig.me)
-
-# Nginx config (HTTP → HTTPS)
+# Nginx config with basic auth + HTTP→HTTPS redirect
 cat > /etc/nginx/sites-available/teslamate <<EOT
 server {
     listen 80 default_server;
@@ -123,17 +137,7 @@ ln -sf /etc/nginx/sites-available/teslamate /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl restart nginx
 
-# Automatic HTTPS
-certbot certonly --nginx --non-interactive --agree-tos --email $USER_EMAIL --domains $PUBLIC_IP --expand --keep || true
-
-# Send email with login details
-SUBJECT="Your TeslaMate is Ready 🚀"
-BODY="Hi,\n\nYour TeslaMate setup is complete!\n\n🔗 URL: https://$PUBLIC_IP\n👤 Username: $USERNAME\n🔑 Password: $PASSWORD\n\nPlease save these details safely.\n\nEnjoy!"
-
-echo -e "To: $USER_EMAIL\nSubject: $SUBJECT\n\n$BODY" | \
-curl -s --url "smtp://smtp.gmail.com:587" --ssl-reqd \
-  --mail-from "$USER_EMAIL" --mail-rcpt "$USER_EMAIL" \
-  --user "$USER_EMAIL:YOUR_GMAIL_APP_PASSWORD_HERE" || echo "Note: Email sending skipped (Gmail setup needed for full automation)."
+PUBLIC_IP=$(curl -s ifconfig.me)
 
 echo "========================================"
 echo "✅ SETUP COMPLETE!"
@@ -142,5 +146,9 @@ echo "URL      : https://$PUBLIC_IP"
 echo "Username : admin"
 echo "Password : $PASSWORD"
 echo ""
-echo "Login details have been emailed to $USER_EMAIL"
-echo "Credentials also saved in /opt/teslamate/.credentials"
+echo "Details saved in /opt/teslamate/.credentials"
+cat > /opt/teslamate/.credentials <<EOC
+URL: https://$PUBLIC_IP
+Username: admin
+Password: $PASSWORD
+EOC
