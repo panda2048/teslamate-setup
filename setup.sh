@@ -117,19 +117,13 @@ EOT
 docker compose down || true
 docker compose up -d
 
-# 7. Nginx with basic auth + HTTP → HTTPS redirect
+# 7. Nginx with basic auth + HTTP
 cat > /etc/nginx/sites-available/teslamate <<EOT
 server {
     listen 80 default_server;
     server_name _;
-    return 301 https://\$host\$request_uri;
-}
 
-server {
-    listen 443 ssl default_server;
-    server_name _;
-
-    auth_basic "TeslaMate Secure Access";
+    auth_basic "TeslaMate - Login Required";
     auth_basic_user_file /etc/nginx/.htpasswd;
 
     location / {
@@ -154,12 +148,12 @@ touch /opt/teslamate/.setup_complete
 echo "========================================"
 echo "✅ SETUP COMPLETE!"
 echo "========================================"
-echo "URL      : https://$PUBLIC_IP"
+echo "URL      : http://$PUBLIC_IP"
 echo "Username : admin"
 echo "Password : $PASSWORD"
 
 cat > /opt/teslamate/.credentials <<EOC
-URL: https://$PUBLIC_IP
+URL: http://$PUBLIC_IP
 Username: admin
 Password: $PASSWORD
 EOC
