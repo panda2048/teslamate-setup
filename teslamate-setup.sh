@@ -87,7 +87,7 @@ volumes:
 EOT
 fi
 
-docker compose up -d
+docker compose up -D
 
 PUBLIC_IP=$(curl -s ifconfig.me)
 
