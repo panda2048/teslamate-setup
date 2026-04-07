@@ -1,27 +1,27 @@
 #!/bin/bash
-# TeslaMate + Nginx + Swap - Clean & Robust for GCP e2-micro Free Tier
-# Safe to run on every boot
+# TeslaMate + Nginx + Swap - Clean & Fixed Version for GCP e2-micro
+# Safe to run on every boot, fixes yaml variable issue
 
 set -e
 
 USER_EMAIL=${USER_EMAIL:-""}
 if [ -z "$USER_EMAIL" ]; then
-    echo "Error: Please set USER_EMAIL=your@email.com"
+    echo "Error: Use USER_EMAIL=your@email.com in startup script"
     exit 1
 fi
 
 # Skip if already completed
 if [ -f /opt/teslamate/.setup_complete ]; then
-    echo "✅ Setup already completed. Skipping."
-    echo "Access: https://$(curl -s ifconfig.me)"
+    echo "✅ TeslaMate already set up. Skipping."
+    echo "Access → https://$(curl -s ifconfig.me)"
     exit 0
 fi
 
 echo "🚀 Starting TeslaMate setup for $USER_EMAIL ..."
 
-# 1. Add swap (critical for 1GB RAM)
+# 1. Add swap (very important for 1GB RAM)
 if [ ! -f /swapfile ]; then
-    echo "Adding 2GB swap file..."
+    echo "Adding 2GB swap..."
     fallocate -l 2G /swapfile
     chmod 600 /swapfile
     mkswap /swapfile
@@ -29,7 +29,7 @@ if [ ! -f /swapfile ]; then
     echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
-# 2. Install Docker properly
+# 2. Install Docker correctly
 apt-get update
 apt-get install -y ca-certificates curl gnupg lsb-release
 
@@ -44,10 +44,10 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin n
 
 systemctl enable --now docker
 
-# 3. Setup directory
+# 3. Setup folder
 mkdir -p /opt/teslamate && cd /opt/teslamate
 
-# 4. Credentials (only once)
+# 4. Generate credentials (only once)
 if [ ! -f .credentials ]; then
     ENC=$(openssl rand -hex 32)
     DB=$(openssl rand -hex 16)
@@ -57,23 +57,25 @@ if [ ! -f .credentials ]; then
     cat > .credentials <<EOF
 USERNAME=$USERNAME
 PASSWORD=$PASSWORD
+ENC=$ENC
+DB=$DB
 EOF
+
     htpasswd -cb /etc/nginx/.htpasswd $USERNAME $PASSWORD
 else
     source .credentials
 fi
 
-# 5. Docker Compose
-if [ ! -f docker-compose.yml ]; then
-    cat > docker-compose.yml <<'EOT'
+# 5. Create correct docker-compose.yml with real values
+cat > docker-compose.yml <<EOT
 services:
   teslamate:
     image: teslamate/teslamate:latest
     restart: always
     environment:
-      ENCRYPTION_KEY: ${ENC}
+      ENCRYPTION_KEY: $ENC
       DATABASE_USER: teslamate
-      DATABASE_PASS: ${DB}
+      DATABASE_PASS: $DB
       DATABASE_NAME: teslamate
       DATABASE_HOST: database
       MQTT_HOST: mosquitto
@@ -85,7 +87,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: teslamate
-      POSTGRES_PASSWORD: ${DB}
+      POSTGRES_PASSWORD: $DB
       POSTGRES_DB: teslamate
     volumes:
       - teslamate-db:/var/lib/postgresql/data
@@ -95,7 +97,7 @@ services:
     restart: always
     environment:
       DATABASE_USER: teslamate
-      DATABASE_PASS: ${DB}
+      DATABASE_PASS: $DB
       DATABASE_NAME: teslamate
       DATABASE_HOST: database
     volumes:
@@ -110,11 +112,12 @@ volumes:
   teslamate-db:
   teslamate-grafana:
 EOT
-fi
 
+# 6. Start TeslaMate
+docker compose down || true
 docker compose up -d
 
-# 6. Nginx with basic auth
+# 7. Nginx with basic auth + HTTP → HTTPS redirect
 cat > /etc/nginx/sites-available/teslamate <<EOT
 server {
     listen 80 default_server;
@@ -131,4 +134,32 @@ server {
 
     location / {
         proxy_pass http://localhost:4000;
-        proxy_set_header Host
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOT
+
+ln -sf /etc/nginx/sites-available/teslamate /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && systemctl restart nginx
+
+PUBLIC_IP=$(curl -s ifconfig.me)
+
+# Mark as completed
+touch /opt/teslamate/.setup_complete
+
+echo "========================================"
+echo "✅ SETUP COMPLETE!"
+echo "========================================"
+echo "URL      : https://$PUBLIC_IP"
+echo "Username : admin"
+echo "Password : $PASSWORD"
+
+cat > /opt/teslamate/.credentials <<EOC
+URL: https://$PUBLIC_IP
+Username: admin
+Password: $PASSWORD
+EOC
