@@ -8,7 +8,7 @@
    - Region: **us-west1**
    - Machine type: **e2-micro**
    - Boot disk: **Debian 12**, **Standard persistent disk**, **30 GB**
-   - Firewall: Check **Allow HTTP traffic**
+   - Firewall: Check **Allow HTTPS traffic**
 
 2. In **Startup script** box, paste this **one line** and **change your email**:
 
