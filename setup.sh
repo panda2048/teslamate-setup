@@ -1,27 +1,27 @@
 #!/bin/bash
-# TeslaMate + Nginx + Swap - Clean & Fixed Version for GCP e2-micro
-# Safe to run on every boot, fixes yaml variable issue
+# TeslaMate with Cloudflare Tunnel - Clean & Idempotent Version
+# Usage: curl ... | TUNNEL_TOKEN=xxx bash
 
 set -e
 
-USER_EMAIL=${USER_EMAIL:-""}
-if [ -z "$USER_EMAIL" ]; then
-    echo "Error: Use USER_EMAIL=your@email.com in startup script"
+TUNNEL_TOKEN=${TUNNEL_TOKEN:-""}
+if [ -z "$TUNNEL_TOKEN" ]; then
+    echo "Error: Please provide tunnel token"
+    echo "Usage: ... | TUNNEL_TOKEN=your-token-here bash"
     exit 1
 fi
 
-# Skip if already completed
+# Skip if already completed (important for reboots)
 if [ -f /opt/teslamate/.setup_complete ]; then
-    echo "✅ TeslaMate already set up. Skipping."
-    echo "Access → https://$(curl -s ifconfig.me)"
+    echo "✅ TeslaMate setup already completed. Skipping."
+    echo "Tunnel is running. Access via your Cloudflare public hostname."
     exit 0
 fi
 
-echo "🚀 Starting TeslaMate setup for $USER_EMAIL ..."
+echo "🚀 Starting TeslaMate with Cloudflare Tunnel ..."
 
-# 1. Add swap (very important for 1GB RAM)
+# Add swap for stability
 if [ ! -f /swapfile ]; then
-    echo "Adding 2GB swap..."
     fallocate -l 2G /swapfile
     chmod 600 /swapfile
     mkswap /swapfile
@@ -29,44 +29,28 @@ if [ ! -f /swapfile ]; then
     echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
-# 2. Install Docker correctly
+# Install Docker
 apt-get update
-apt-get install -y ca-certificates curl gnupg lsb-release
-
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
-
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-apt-get update
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin nginx apache2-utils
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin curl
 
 systemctl enable --now docker
 
-# 3. Setup folder
 mkdir -p /opt/teslamate && cd /opt/teslamate
 
-# 4. Generate credentials (only once)
+# Generate credentials only once
 if [ ! -f .credentials ]; then
     ENC=$(openssl rand -hex 32)
     DB=$(openssl rand -hex 16)
-    USERNAME="admin"
-    PASSWORD=$(openssl rand -hex 12)
 
     cat > .credentials <<EOF
-USERNAME=$USERNAME
-PASSWORD=$PASSWORD
 ENC=$ENC
 DB=$DB
 EOF
-
-    htpasswd -cb /etc/nginx/.htpasswd $USERNAME $PASSWORD
-else
-    source .credentials
 fi
 
-# 5. Create correct docker-compose.yml with real values
+source .credentials
+
+# Docker Compose
 cat > docker-compose.yml <<EOT
 services:
   teslamate:
@@ -113,34 +97,13 @@ volumes:
   teslamate-grafana:
 EOT
 
-# 6. Start TeslaMate
-docker compose down || true
 docker compose up -d
 
-# 7. Nginx with basic auth + HTTP
-cat > /etc/nginx/sites-available/teslamate <<EOT
-server {
-    listen 80 default_server;
-    server_name _;
-
-    auth_basic "TeslaMate - Login Required";
-    auth_basic_user_file /etc/nginx/.htpasswd;
-
-    location / {
-        proxy_pass http://localhost:4000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOT
-
-ln -sf /etc/nginx/sites-available/teslamate /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl restart nginx
-
-PUBLIC_IP=$(curl -s ifconfig.me)
+# Install and start Cloudflare Tunnel
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cloudflared.deb
+dpkg -i cloudflared.deb
+cloudflared service install $TUNNEL_TOKEN
+systemctl enable --now cloudflared
 
 # Mark as completed
 touch /opt/teslamate/.setup_complete
@@ -148,12 +111,8 @@ touch /opt/teslamate/.setup_complete
 echo "========================================"
 echo "✅ SETUP COMPLETE!"
 echo "========================================"
-echo "URL      : http://$PUBLIC_IP"
-echo "Username : admin"
-echo "Password : $PASSWORD"
-
-cat > /opt/teslamate/.credentials <<EOC
-URL: http://$PUBLIC_IP
-Username: admin
-Password: $PASSWORD
-EOC
+echo "TeslaMate is running."
+echo "Go back to Cloudflare dashboard and add Public Hostname:"
+echo "   Service → http://localhost:4000"
+echo ""
+echo "Setup will not run again on reboot."
